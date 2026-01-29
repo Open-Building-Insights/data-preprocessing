@@ -1,17 +1,17 @@
-# Data Preprocessing and Inference
+# Data Preprocessing
 
 ## Overview
 
-Open Building Insights's objective is to produce high-quality building footprint datasets, by leveraging publicly available datasets, machine learning and geospatial analytics. The building footprints are obtained from Google-Microsoft Open Buildings (combined and published by [VIDA](https://source.coop/vida/google-microsoft-open-buildings)) and merged with select buildings from OpenStreet Maps. The building footprint catalog is further enriched by other data from public sources to provide fine grained information on the building level.
+Open Building Insights's objective is to produce high-quality building footprint datasets, by leveraging publicly available data, machine learning and geospatial analytics. The building footprints are obtained from Google-Microsoft Open Buildings (combined and published by [VIDA](https://source.coop/vida/google-microsoft-open-buildings)) and merged with select buildings from OpenStreet Maps. The building footprint catalog is further enriched by other data from public sources to provide fine grained information on the building level.
 
-This section outlines the required data pre-processing steps in order to generate the building footprint dataset. The associated notebooks containing the code are listed in section [Notebooks](#notebooks).
+This section outlines the required data pre-processing steps in order to generate the building footprint dataset. The associated notebooks containing the code are listed in [Notebooks](#notebooks).
 
 
-## 1.	Vida data preprocessing 
+## VIDA data preprocessing 
 
 The publicly available [Google-Microsoft Open Buildings (VIDA)](https://source.coop/vida/google-microsoft-open-buildings) contains building footprints that are available both globally and by country in various formats. The dataset contains a polygon defining the building's footprint on the ground, a confidence score indicating certainity of it being a building, and the respective source (either Google or Microsoft). 
 
-In our approach, the data was accessed in **GeoParquet** format using one of two methods: 
+In this workflow, the data was accessed in **GeoParquet** format using one of two methods: 
   1. **By country using s2 partitions (India)**: In this approach, all S2 partition files available for the target country are first identified from the VIDA country partition directory (published as GeoParquet partitions by S2 grid). Each partition filename is parsed into an ``S2 cell ID``, and the ID is converted into a geographic point by computing the centroid coordinates (lat/lon). The S2 points are then spatially filtered against a buffered area of interest (AOI) and the correspoding files downloaded. The selected S2 IDs are used to extract buildings from the downloaded partitions.
   
   2. **By country as a single file (Kenya)**: For Kenya, the data is downloaded as a single country-level GeoParquet file. This approach is used because the relevant S2 cells cover a much larger extent and their centroid coordinates fall outside the country boundaries.
@@ -22,121 +22,77 @@ In our approach, the data was accessed in **GeoParquet** format using one of two
     - Perimeter in meters 
     - Number of building faces
 
-## 2.	Building height calculation
+## Building height calculation
 
-Google's [Open Buildings 2.5D Temporal Dataset] (https://sites.research.google/gr/open-buildings/temporal/) is used for height calculation. 
+Google’s [Open Buildings 2.5D Temporal Dataset](https://sites.research.google/gr/open-buildings/temporal/) is used as the source of building height rasters. Before executing the download script, the GeoTIFF tiles covering the AOI are identified using a [Colab Notebook](https://colab.research.google.com/github/google-research/google-research/blob/master/building_detection/open_buildings_temporal_download_region_geotiffs.ipynb) provided by Google, which generates a list of tile URLs for the AOI. This list is then used to download the relevant raster files.
 
+Building heights are calculated by sampling raster pixels inside each building footprint polygon. For each GeoTIFF tile, the script extracts the height layer, reprojects the raster to CRS (Coordinate Reference System) matching the building footprints, and processes the tile in overlapping windows to keep memory use manageable. Within each window, buildings are preselected using centroid bounding boxes, then a polygon mask is applied so that only pixels inside the footprint contribute to the height estimate (no-data values are treated as missing).
 
+For each building, the script computes three height statistics: ``height_mean``, ``height_median``, and ``height_max`` based on valid pixels. Two other attributes are derived from the height: ``floors`` (estimated number of storeys) and ``GFA`` (gross floor area), where GFA is calculated as ``footprint_area × floors``.
 
+The follwing assumptions are applied: 
+ - If a building’s height cannot be computed (i.e., the result is NaN), it is assigned a default height of 4.5 m. 
+ - Heights are standardized into discrete values for consistency: 
+    - any height up to 4.5 m is treated as a single-storey building and set to 4.5 m
+    - heights between 4.5 m and 7.5 m are treated as two-storey buildings and set to 7.5 m
+    - heights above 7.5 m are rounded up to the next 3 m step (for example, 8.5 m → 10.5 m, 11.0 m → 13.5 m, etc.).
 
+## Urban / Rural classification
 
+The [Global Human Settlement Layer – Settlement Model (GHS-SMOD)](https://human-settlement.emergency.copernicus.eu/download.php?ds=smod) is used as the source for urban/rural classification. GHSL-SMOD is distributed as a global raster where each pixel stores a settlement class code, provided at 1 km (1000 m) resolution. In this workflow, the raster is used to assign an urbanization label to each building footprint in the AOI.
 
+The workflow follows two main steps. First, the global SMOD raster is reprojected to the same CRS as the building data and clipped to the AOI boundary. The clipped raster is then converted into polygons for each settlement class by extracting the areas covered by the relevant SMOD classes and writing them as GeoJSON features (one feature type per class). Second, building centroids are spatially matched to these polygons using a point-in-polygon check, and the corresponding class label is written to the building dataset. 
 
+Two label sets `urban_split` and `ghsl_smod` are produced and added to the building dataset using two segregation styles:
 
+* **Overview (`urban_split`)**: Classes used are - `Urban`, `Suburban`, `Rural`
+* **Detailed (`ghsl_smod`)**: Classes used are - `Urban Center`, `Dense Urban`, `Semi-Dense Urban`, `Suburban / Peri-Urban`, `Rural Cluster`, `Low Density Rural`
 
+Buildings that are not matched to any GHSL-SMOD class polygon during the spatial join are assigned `Rural` by default and, for the detailed segregation `Low Density Rural`.
 
+## Elevation calculation
 
-## Urban/Rural Classification
-<a id="urban_rural_section"></a>
+Elevation rasters are obtained from [EarthEnv-DEM90](https://www.earthenv.org/DEM.html) provided at ~90 m resolution. Before assigning elevations to buildings, the script identifies which DEM tiles are needed for the AOI by reading the boundary GeoJSON and extracting its bounding box (min/max longitude and latitude). Since EarthEnv-DEM90 is published as **5° × 5° tiles**, the AOI bounds are rounded to the nearest 5 degrees, and the corresponding tile URLs are generated (e.g., `EarthEnv-DEM90_NxxEyyy.tar.gz`). Each required tile archive is downloaded from the [EarthEnv mirror](https://datacommons.cyverse.org/browse/iplant/home/shared/earthenv_dem_data/EarthEnv-DEM90) and extracted, keeping only the files needed for processing (`.bil`, `.hdr`, `.prj`) in a local `elevation_rasters/` folder.
 
-Global Human Settlement Layer provides a publicly available data layer named Settlement Model grid, which is used to classify buildings into Urban/Suburban/Rural categories based on their location as well as associating the original SMOD provided category to the building as well. 
-A diagram of the urban/rural classification process is shown in [Figure 5](#urban_rural_split).
-This layer, represented by a black and white image of a country provides a categorization of each 1x1 km large grid cell as a pixel.
-Each building is classified based on which grid cell its centroid belongs to. Additionally, the grid is represented as an overlay in the map in our website to provide a simple guideline for end users.
-<a id="urban_rural_split"></a>
-<figure>
-  <img src="figures/urban_rural_split.png" alt="urban_rural_split" width="624"/>
-  <figcaption>Figure 5: urban/rural classification</a></figcaption>
-</figure>
-
-## Building Image and Metadata Extraction
-<a id="building_image_section"></a>
-
-The 110x110 km large tile images are loaded from the cloud object storage and processed with the building information from the ``features_db`` database. 
-For each building in features_db, the corresponding building image is cropped from the Kenya images and added to a dedicated bucket in Cloud Object Storage. 
-A link to the location, where it is stored in the cloud bucket. 
-To optimize I/O bandwidth of the cloud bucket each building image cropped from the same Sentinel-2 tile is stored in the same collection, compressed to provide efficient access to each image for a given tile. 
-This choice is efficient as the entire processing process is based on a tile-by-tile processing of buildings, so each building image can be loaded to memory with one I/O request. 
-The process is depicted in  [Figure 6](#building_image).
-<a id="building_image"></a>
-<figure>
-  <img src="figures/building_image_and_metadata_extraction.png" alt="building_image" width="599"/>
-  <figcaption>Figure 6: building image and metadata extraction</a></figcaption>
-</figure>
-
-## ML Inferencing
-<a id="ml_inferencing"></a>
-
-Tagged buildings from OSM are used in conjunction with their Sentinel images to train a model enabling the categorization of each building from ``features_db`` (detailed in <a href="../machine_learning/README.md">Machine Learning Model</a>).
-The Machine Learning inference process consists of evaluating each building in ``features_db``, which is not tagged in OSM, using the pre-trained classification model (see [Figure 7](#building_inference)).
-For each evaluated building, the fields ``type`` and ``type_source`` are updated to ``res`` / ``non-res`` and ``classification_model``, respectively.
-Furthermore, the model information (``model_info``) and confidence level of the inference between 0 and 1 (``confidence``) are added to the building information. A sketch of the updated ``features_db`` database is depicted in [Figure 1](#features_db).
-
-<a id="building_inference"></a>
-<figure>
-  <img src="figures/inference_main.png" alt="building_inference" width="619"/>
-  <figcaption>Figure 7: Diagram of the ML inference process. The pre-trained model is used to classify buildings of unknown type. A confidence level is then added to the inferenced building type. </a></figcaption>
-</figure>
-
-## Future Improvements
-
-- Automate VIDA data download process, such that a new version is always on the cloud, currently executed on demand
-
-## Associated Risk
-
-To provide classified buildings for any given country two datasets are used, namely a building catalogue (named VIDA) and satellite images to obtain the building footprints/roof images (using Sentinel2 provided images). These images are used to classify the buildings into residential and non-residential buildings from the building catalogue. In cases the building catalogue is substantially newer, than the satellite images, several buildings might be newly constructed and included in the database, while the sentinel images might contain images of constructions of even pre-construction imagery for these areas. This provides incorrect roof image for newly constructed buildings, causing incorrect classification is them by the model.
-
-This risk has a medium impact and its mitigation is handled by the technical team.
-
-**Solution:** The solution to mitigate this risk is to obtain the most recent Sentinel2 images after each update of the VIDA dataset to have the most recent building images for each building from the catalogue.
-
-The cost to resolve/mitigate this problem is to obtain the newest possible Sentinel2 images after any update of the VIDA database, which is a lengthy and resource consuming process.
+Elevations are then added to the building dataset. For each DEM tile, the script reads the raster metadata from the `.hdr` file (grid size, pixel size, upper-left origin, and nodata value), loads the `.bil` elevation array, and replaces nodata with `NaN`. To avoid processing unnecessary tiles, DEM tiles that overlap the building dataset extent are selected by checking tile bounding boxes derived from the `.hdr` metadata (using a coarse 0.2° sampling grid to speed up the overlap check). Buildings are then processed tile-by-tile by selecting only those whose centroids fall inside the tile bounds, converting each centroid coordinate to raster pixel indices, and reading the corresponding elevation value from the DEM grid. Intermediate parquet outputs are written per tile and finally merged into a single output file containing an added `elevation` column for each building.
 
 ## Implementation Details
 
 The list of most important libraries is provided:
 
-| Package Name | Version | Short Description |
-| --- | --- | --- |
-| getpass | 1.0.2 | Portable password input |
-| jaydebeapi | 1.2.3 | Use JDBC database drivers from Python 2/3 or Jython with a DB-API. |
-| jpype | 1.4.1 | A Python to Java bridge. |
-| json | default | A library to work with JSON documents. |
-| geopandas | 1.0.1 | Geographic pandas extensions |
-| pandas | 1.5.3 | Powerful data structures for data analysis, time series, and statistics |
-| pyproj | 3.6.1 | Python interface to PROJ (cartographic projections and coordinate transformations library) |
-| shapely | 2.0.5 | Manipulation and analysis of geometric objects |
-| numpy | 1.23.5 | Fundamental package for array computing in Python |
-| requests | 2.31.0 | Python HTTP for Humans. |
-| PIL | 10.4.0 | Python Imaging Library |
-| ibm_boto3 |  | The IBM SDK for Python |
-| botocore | 1.27.59 | Low-level, data-driven core of boto 3. |
-| ibm_cloud_sdk_core | 3.20.3 | Core library used by SDKs for IBM Cloud Services |
-| threading | default | Standard threading module |
-| rasterio | 1.3.10 | Fast and direct raster I/O for use with Numpy and SciPy |
-| tensorflow | 2.17.0 | TensorFlow is an open source machine learning framework for everyone |
-| Keras | 3.4.1 | Deep Learning for Humans |
-| rioxarray | 0.17.0 | geospatial xarray extension powered by rasterio |
-| scikit-image | 0.24.0 | Image processing in Python |
-| mgrs | 1.5.0 | MGRS coordinate conversion for Python |
-| matplotlib | 3.9.1 | Python plotting package |
-| urllib | 2.2.2 | HTTP library with thread-safe connection pooling, file post, and more. |
-| scipy | 1.14.0 | Fundamental algorithms for scientific computing in Python |
-| scikit-learn | 1.5.1 | A set of python modules for machine learning and data mining |
+| Package Name | Short Description |
+| --- | --- |
+| geopandas | Reading/writing GeoParquet/GeoJSON and working with geospatial tables. |
+| pandas | Data wrangling (filters/joins), tabular processing, and Parquet I/O. |
+| numpy | Array operations, NaN handling, and numeric/stat computations. |
+| shapely | Geometry operations (polygons/points), centroids, and spatial predicates. |
+| pyproj | CRS handling and geodesic calculations (e.g., area/perimeter). |
+| pyarrow | Parquet/GeoParquet backend support (often used via pandas/geopandas). |
+| rasterio | Reading GeoTIFF/DEM tiles, windowed raster reads, transforms, masking. |
+| rioxarray | Raster reprojection and CRS alignment (built on rasterio/xarray). |
+| scikit-image | Extracting contours from GHSL-SMOD rasters to generate class polygons. |
+| matplotlib | Masking helpers and lightweight plotting used in raster workflows. |
+| plotly | Interactive map previews (e.g., AOI + selected S2 cells). |
+| requests | Streaming downloads for parquet/GeoTIFF/tar.gz assets. |
+| boto3 | S3-style listing/downloading (e.g., public Source Cooperative endpoint). |
+| ibm_boto3 | IBM Cloud Object Storage client for uploads/downloads. |
+| botocore | Low-level S3/COS client configuration used by boto3/ibm_boto3. |
+| tqdm | Progress bars for long download/processing loops. |
+| s2cell | Converting S2 cell IDs to lat/lon for partition selection (India workflow). |
+| pillow (PIL) | Minor image utilities used in some notebook steps. |
+| jaydebeapi | JDBC bridge (imported; not core to the main processing pipeline). |
+| jpype | Python–Java bridge (imported; not core to the main processing pipeline). |
 
-##Execution Details
 
-To execute the data curation process the following notebooks are executed in order:
-1.	1_download_VIDA_datasets.ipynb
-2.	2_spatial_grid_generation.ipynb
-3.	3_filter_and_extract_buildings_from_VIDA.ipynb
-4.	4_match_buildings.ipynb
-5.	5_DB2_data_ingestion_from_parquet.ipynb
-6.	6_ovarlapping_removal.ipynb
-7.	7_building_height_calculation.ipynb
-8.	8_rural_urban_json_segregation.ipynb
-9.	9_urban_rural_segregation.ipynb
-10.	10_S2_TIF_collection.ipynb
-11.	11_building_image_and_metadata_extraction.ipynb 
-12.	12_inference_main.ipynb
+## Execution Details
+
+The following notebooks are executed in order:
+
+- 1_download_VIDA_S2grid_datasets.ipynb || 1_download_VIDA_datasets_Kenya.ipynb
+-	2_filter_and_extract_buildings_from_VIDA_S2_Partitions.ipynb || 2_filter_and_extract_buildings_data-Kenya.ipynb
+-	3_download_google_25D.ipynb
+-	4_building_height_calculation_parquet.ipynb
+-	5_rural_urban_json_segregation.ipynb
+-	6_urban_rural_segregation_parquet_ver.ipynb
+-	7_elevation_calculation.ipynb
 
