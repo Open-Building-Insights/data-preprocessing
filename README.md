@@ -62,26 +62,24 @@ The list of most important libraries is provided:
 
 | Package Name | Short Description |
 | --- | --- |
-| geopandas | Reading/writing GeoParquet/GeoJSON and working with geospatial tables. |
-| pandas | Data wrangling (filters/joins), tabular processing, and Parquet I/O. |
-| numpy | Array operations, NaN handling, and numeric/stat computations. |
-| shapely | Geometry operations (polygons/points), centroids, and spatial predicates. |
-| pyproj | CRS handling and geodesic calculations (e.g., area/perimeter). |
-| pyarrow | Parquet/GeoParquet backend support (often used via pandas/geopandas). |
-| rasterio | Reading GeoTIFF/DEM tiles, windowed raster reads, transforms, masking. |
-| rioxarray | Raster reprojection and CRS alignment (built on rasterio/xarray). |
-| scikit-image | Extracting contours from GHSL-SMOD rasters to generate class polygons. |
-| matplotlib | Masking helpers and lightweight plotting used in raster workflows. |
-| plotly | Interactive map previews (e.g., AOI + selected S2 cells). |
-| requests | Streaming downloads for parquet/GeoTIFF/tar.gz assets. |
-| boto3 | S3-style listing/downloading (e.g., public Source Cooperative endpoint). |
-| ibm_boto3 | IBM Cloud Object Storage client for uploads/downloads. |
-| botocore | Low-level S3/COS client configuration used by boto3/ibm_boto3. |
-| tqdm | Progress bars for long download/processing loops. |
-| s2cell | Converting S2 cell IDs to lat/lon for partition selection (India workflow). |
-| pillow (PIL) | Minor image utilities used in some notebook steps. |
-| jaydebeapi | JDBC bridge (imported; not core to the main processing pipeline). |
-| jpype | Python–Java bridge (imported; not core to the main processing pipeline). |
+| geopandas | Geographic pandas extensions |
+| pandas | Powerful data structures for data analysis, time series, and statistics |
+| numpy | Fundamental package for array computing in Python |
+| shapely | Manipulation and analysis of geometric objects |
+| pyproj | Python interface to PROJ (cartographic projections and coordinate transformations library) |
+| pyarrow | Columnar in-memory format and Parquet/Arrow I/O library |
+| rasterio | Fast and direct raster I/O for use with NumPy and SciPy |
+| rioxarray | geospatial xarray extension powered by rasterio |
+| matplotlib | Python plotting package |
+| plotly | Interactive graphing library for Python |
+| requests | Python HTTP for Humans. |
+| tqdm | Fast, extensible progress bar for Python and CLI |
+| boto3 | AWS SDK for Python (used for S3-compatible object storage access) |
+| botocore | Low-level, data-driven core of boto 3. |
+| ibm_boto3 | The IBM SDK for Python |
+| jaydebeapi | Use JDBC database drivers from Python 2/3 or Jython with a DB-API. |
+| jpype | A Python to Java bridge. |
+| s2cell | S2 cell ID utilities (e.g., converting S2 IDs to lat/lon) |
 
 
 ## Execution Details
