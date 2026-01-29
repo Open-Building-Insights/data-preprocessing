@@ -2,128 +2,39 @@
 
 ## Overview
 
-Open Building Insights's objective is to produce high-quality building footprint datasets, namely a refined settlement data layer, by leveraging machine learning.
-The building footprints in the resulting data set are then classified according to a priority tree shown <a href="../machine_learning/README.md#classification_tree">here</a>.
-In this section, we present the required data pre-processing and inference steps in order to generate this building footprint dataset.
-The pipeline is based on processing two data sets, namely [Sentinel-2](https://sentinel.esa.int/web/sentinel/missions/sentinel-2) Satellite images of Kenya and publicly available [Google-Microsoft Open Buildings (VIDA)](https://beta.source.coop/repositories/vida/google-microsoft-open-buildings/description/) data, combined by VIDA.
+Open Building Insights's objective is to produce high-quality building footprint datasets, by leveraging publicly available datasets, machine learning and geospatial analytics. The building footprints are obtained from Google-Microsoft Open Buildings (combined and published by [VIDA](https://source.coop/vida/google-microsoft-open-buildings)) and merged with select buildings from OpenStreet Maps. The building footprint catalog is further enriched by other data from public sources to provide fine grained information on the building level.
 
-To further enrich the building footprint catalog additional sources are ingested to associate additional attributes to buildings.
+This section outlines the required data pre-processing steps in order to generate the building footprint dataset. The associated notebooks containing the code are listed in section [Notebooks](#notebooks).
 
-The following sections describe the data pre-processing part of the <a href="../README.md#data_flow">data flow diagram</a>. The associated notebooks containing the code are listed in section [Notebooks](#notebooks).
 
-## Data Gathering
+## 1.	Vida data preprocessing 
 
-The objective is to generate a high-quality dataset containing building classifications for a certain geography. 
-This is achieved by combining [Sentinel-2](https://sentinel.esa.int/web/sentinel/missions/sentinel-2) satellite images with [Google-Microsoft Open Buildings (VIDA)](https://beta.source.coop/repositories/vida/google-microsoft-open-buildings/description/) data, , which contains a building catalog for a given region without providing auxiliary information.
-Therefore all buildings available in the VIDA building catalog are categorized using a machine learning model built based on the [Open Streep Map (OSM)](https://www.openstreetmap.org/) data with building classification (i.e. buildings that are tagged).
+The publicly available [Google-Microsoft Open Buildings (VIDA)](https://source.coop/vida/google-microsoft-open-buildings) contains building footprints that are available both globally and by country in various formats. The dataset contains a polygon defining the building's footprint on the ground, a confidence score indicating certainity of it being a building, and the respective source (either Google or Microsoft). 
 
-The following two datasources are used:
+In our approach, the data was accessed in **GeoParquet** format using one of two methods: 
+  1. **By country using s2 partitions (India)**: In this approach, all S2 partition files available for the target country are first identified from the VIDA country partition directory (published as GeoParquet partitions by S2 grid). Each partition filename is parsed into an ``S2 cell ID``, and the ID is converted into a geographic point by computing the centroid coordinates (lat/lon). The S2 points are then spatially filtered against a buffered area of interest (AOI) and the correspoding files downloaded. The selected S2 IDs are used to extract buildings from the downloaded partitions.
+  
+  2. **By country as a single file (Kenya)**: For Kenya, the data is downloaded as a single country-level GeoParquet file. This approach is used because the relevant S2 cells cover a much larger extent and their centroid coordinates fall outside the country boundaries.
 
-- [Sentinel-2](https://sentinel.esa.int/web/sentinel/missions/sentinel-2) satellite images of Kenya downloaded from the public S3 bucket containing [Sentinel-2 Cloud-Optimized GeoTIFFs](https://registry.opendata.aws/sentinel-2-l2a-cogs/) using the tile system defined in this data source.
-- WSF3DV3 data layer provided by the [German Aerospace Center (DLR)](https://www.dlr.de/en/) to utilize in the building height calculation process.
-- Publicly available [Google-Microsoft Open Buildings (VIDA)](https://beta.source.coop/repositories/vida/google-microsoft-open-buildings/description/) data, which consists of a list of buildings with specific coordinates and polygons (i.e. shapes of the buildings). The data is downloaded manually as geoparquet files and saved on the cloud.
-- Publicly available [GHS Settlement Model grid](https://ghsl.jrc.ec.europa.eu/download.php?ds=smod) downloaded as GeoTIF to categorize buildings into Urban/Rural categories.
-- Publicly available [Open Streep Map (OSM)](https://www.openstreetmap.org) data, which consists of a list of buildings with specific coordinates and polygons (i.e. shapes of the buildings). The data is downloaded manually as shapefiles (.shp) from [geofabrik.de](https://download.geofabrik.de/africa/kenya-latest-free.shp.zip) and saved on the cloud. (refer to <a href="sample data/kenya_osm_sample.csv">OSM sample data</a>)
+  After download, the buildings are filtered using a minimum confidence threshold of **0.7**. In addition to ``geometry``, ``footprint source``, and ``confidence``, the following attributes were computed from each footprint polygon:
 
-<a id="Sentinel_2_download_cloud_removal"></a>
-## Obtaining cloud-free Sentinel-2 images
+    - Area in meters
+    - Perimeter in meters 
+    - Number of building faces
 
-<a id="sentinel2_download_cloud_remove"></a>
-<figure>
-  <img src="figures/sentinel2_download_cloud_remove.png" alt="sentinel2_download_cloud_remove" width="607"/>
-  <figcaption>Figure 1: Sentinel-2 image gathering and cloud removal process.</a></figcaption>
-</figure>  
+## 2.	Building height calculation
 
-This documentation describes approach that has been used for collecting Sentinel 2 true color imagery (TCI) for desired region. Sentinel 2 satellites namely: Sentinel-2A and Sentinel-2B are two Earth observation satellites operated by the European Space Agency. They are part of the [Sentinel mission within the Copernicus program](https://sentiwiki.copernicus.eu/web/s2-mission). The main difference between Sentinel-2A and Sentinel-2B is their orbit. Sentinel-2A and Sentinel-2B follow the same orbit, but are 180 degrees apart, which allows for more frequent observations of the Earth's surface. Both satellites have the same equipment, which includes a multispectral thermal imager that takes images in 13 spectral bands, from visible to short-wave infrared. Sentinel-2A and Sentinel-2B work together to provide more frequent and complete coverage of the earth's surface, which is important for monitoring and managing the environment.
+Google's [Open Buildings 2.5D Temporal Dataset] (https://sites.research.google/gr/open-buildings/temporal/) is used for height calculation. 
 
-The products of work of these satellites are available in AWS S3 bucket called [sentinel-cogs](https://registry.opendata.aws/sentinel-2-l2a-cogs/) which is free accessed in us-west-2 AWS Region. The bucket uses MGRS schema for storing cloud optimized products. The precision used for storing is 100km grid square per tile. (eg. 37MBU tile covers Nairobi). All the products available for certain MGRS tile stored by the date of the capture in format  "YYYY/m/product/*product_files".  The month level folder contains both products for from A and B satellites with date of capture in their name. The product folder itself contains a  tif products of cloud optimization and product metadata. The files we are using for assembling cloudless tiles are:
--	product_timestamp_L2A.json or product_timestamp_L2B.json &#8594; Json with product metadata contains data coverage, cloud coverage and many more information
--	TCI.tif &#8594; True Color Image of captured region with clouds with resolution 10m/px
--	SCL.tif &#8594; Scene Classification Layer with resolution 20m/px
 
-The last one from above list is a Scene Classification Layer which describes the captured scene layers described in the next table:
 
-| Value | Scene Classification |
-| ----- | -------------------- |
-| 0 | No Data (Missing data) |
-| 1 | Saturated or defective pixel |
-| 2 | Topographic casted shadows (called "Dark features/Shadows" for data before 2022-01-25) |
-| 3 | Cloud shadows |
-| 4 | Vegetation |
-| 5 | Not-vegetated |
-| 6 | Water |
-| 7 | Unclassified |
-| 8 | Cloud medium probability |
-| 9 | Cloud high probability |
-| 10 | Thin cirrus | 
-| 11 | Snow or ice |
 
-### Approach
 
-The process of collecting data starts from defining necessary tiles that need to be collected. The tiles are defined in list in MGRS format as a 100x100 km large square, then a desired range of years and months need to be specified, also max amount of products that will be processed is defined. With all defined above parameters the main script is good to go. The steps lays in the script are following:
-1.	Find all products for certain MGRS tile in defined time range
-2.	Collect necessary characteristics from json metadata (data coverage, cloud coverage) of each product from point 1
-3.	Choose max number of products with defined limit, with minimal clouds and maximal data coverage.
-4.	Mask off clouds from each appropriate product using its SCL layer.
-5.	Assemble masked tiles into final cloudless tile.
 
-### Details about masking and assembling
 
-For masking off clouds from color image we are using SCL layers:
--	Cloud shadows (3)
--	Cloud medium probability (8)
--	Cloud high probability (9)
--	Thin cirrus (10). 
 
-All listed above layers are removed from TCI and that is a result of cloud off masking.
 
-After masking off clouds, we retrieve images with masked regions that contains no data pixels (black spots), to avoid them in result tile we need to process a few products collected at start to obtain as much as possible pixels with information for selected MGRS tile. The method used in approach is calculated median for each non-black pixel, for collected products. After calculating median of all non-black pixels, the result tile is saved as tiff raster file with necessary metadata according to its MGRS coordinates and resolution.
 
-## VIDA data pre-processing
-<a id="vida_data_preprocessing"></a>
-
-The database ``features_db`` is first created to host the building catalog provided by VIDA, filtered using no-less than 0.7 vida confidence. 
-It will be updated along the data flow and serves as a central database for all additional building information. A sketch of the final database containing updated building information (with fields such as ``height``) is shown in [Figure 2](#features_db).
-The database is saved on [IBM DB2](https://www.ibm.com/products/db2), which is a fully managed, relational database management system capable of efficiently storing tens of millions records.
-The corresponding parts of satellite images are stored in [Cloud Object Storage](https://www.ibm.com/products/cloud-object-storage) in compressed building footprint collections.
-
-<a id="features_db"></a>
-<figure>
-  <img src="figures/features_db.png" alt="features_db" width="607"/>
-  <figcaption>Figure 2: ``features_db`` and building footprints stored in COS.</a></figcaption>
-</figure>  
-
-SEforALL main database features_db with new fields (i.e. new building information) added through the preprocessing and inferencing steps detailed in the sections below.
-
-As a next step, the VIDA data is loaded from the cloud object storage, enriched with new fields and merged into the ``features_db`` database. The VIDA building data is further merged with building footprints from OSM, whenever OSM tags are present. For buildings sourced from OSM the following information provided by OSM is stored:
-- Field ``type`` with information about whether a building is tagged as residential or non-residential (``res`` or ``non-res``). This binary classification corresponds to the first priority level of our solution (<a href="../machine_learning/README.md#classification_tree">priority tree for the building type classification</a>). The field is left empty if no information is available in the OSM dataset.
-
-An overview of the process is shown in [Figure 3: Pre-processing of VIDA data](#building_area). The following fields are thereby added for every record in VIDA data:
-- Field containing the building-ID, which consists of the calculated centroid of the polygon of the associated building (position in latitude and longitude).
-- Field ``area_in_meters`` containing area of the building (units in ``m²``)
--	Field ``perimeter_in_meters`` containing the perimeter of the building (units in ``m``)
--	Number of building ``faces`` (outer walls)
-- Field ``type_source`` containing the source of the tag: if the area is less than ``threshold = 20m²``, the field is set to ``type_source = area``. If field `` type`` is set to ``res`` or ``non-res``, then ``type_source = osm``.
-
-<a id="building_area"></a>
-<figure>
-  <img src="figures/update_features_DB_from_VIDA.png" alt="building_area" width="623"/>
-  <figcaption>Figure 3: Pre-processing of VIDA data. New fields are added to the VIDA dataset and merged with <code>features_db</code> database. </a></figcaption>
-</figure>
-
-## Building Height Calculation
-<a id="building_height_calculation"></a>
-
-The ``WSF3DV3`` data layer is provided by DLR and is used to calculate the height of the buildings.
-A diagram of the height calculation process is shown in [Figure 4](#building_height).
-This building height layer provides an additional black-and-white scale indicating the height of the buildings. 
-For each building ID in ``features_db`` the median height is extracted. A 1px offset (approx. 10m) is added to the height value and saved as a new field ``height`` in the database.
-
-<a id="building_height"></a>
-<figure>
-  <img src="figures/building_height_calculation.png" alt="building_height" width="900"/>
-  <figcaption>Figure 4: Building height calculation</a></figcaption>
-</figure>
 
 ## Urban/Rural Classification
 <a id="urban_rural_section"></a>
